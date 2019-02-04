@@ -28,6 +28,64 @@ _db = SqliteExtDatabase(None)
 LATEST_VERSION=2
 
 
+@_db.func("extract_app")
+def extract_app(datastr: str) -> str:
+    try:
+        data = json.loads(datastr)
+
+        # aw-watcher-window
+        if "app" in data:
+            return data["app"]
+    except:
+        return None
+
+
+@_db.func("extract_path")
+def extract_path(datastr: str) -> str:
+    try:
+        data = json.loads(datastr)
+
+        # aw-watcher-window
+        if "app" in data and "title" in data:
+            # Extract project from IntelliJ windows
+            if data["app"] == "jetbrains-idea":
+                path = data["title"].split(" ")[3]
+                return path
+            else:
+                # HACK FOR NOW
+                return data["title"]
+    except:
+        return None
+
+
+@_db.func("extract_project")
+def extract_project(datastr: str) -> str:
+    try:
+        data = json.loads(datastr)
+
+        # aw-watcher-window
+        if "app" in data and "title" in data:
+
+            # Extract project from IntelliJ windows
+            if data["app"] == "jetbrains-idea":
+                project = data["title"].split(" ")[1]
+                if project[0] == "[" and project[-1] == "]":
+                    return project[1:-1]
+    except:
+        return None
+
+
+# @_db.func("extract_intellij_project_path")
+# def extract_intellij_project_path(title: str) -> str:
+#     try:
+#         project_path = title.split(" ")[1]
+#
+#         if project_path[0] == "[" and project_path[-1] == "]":
+#             return project_path[1:-1]
+#     except:
+#         return None
+
+
 def chunks(l, n):
     """Yield successive n-sized chunks from l.
     From: https://stackoverflow.com/a/312464/965332"""
@@ -121,6 +179,140 @@ class PeeweeStorage(AbstractStorage):
         if not EventModel.table_exists():
             EventModel.create_table()
         self.update_bucket_keys()
+
+        self.db.execute_sql("""
+        create table if not exists resource (
+  id integer PRIMARY KEY AUTOINCREMENT,
+  eventmodel_id integer REFERENCES eventmodel (id),
+  timestamp datetime,
+  duration decimal(10,5),
+  project varchar(255),
+  identifier varchar(255),
+  type varchar(255)
+);
+        """)
+
+        self.db.execute_sql("""
+        create trigger if not exists add_resource
+  after insert on eventmodel
+  for each row
+  begin
+    insert into resource (eventmodel_id, timestamp, duration, project, identifier, type)
+    values (
+            new.id,
+            new.timestamp,
+            new.duration,
+            (
+              select json_extract(datastr, '$.projectPath')
+              from eventmodel
+              where json_extract(datastr, '$.project') is not null
+                and timestamp >= datetime('now', '-10 minutes')
+              order by timestamp desc
+              limit 1
+            ),
+            (
+              select
+                     case client
+                     when 'aw-watcher-idea' then   json_extract(new.datastr, '$.file')
+                when 'aw-client-web' then json_extract(new.datastr, '$.url')
+                       when 'aw-watcher-window' then json_extract(new.datastr, '$.title')
+              end
+              from bucketmodel
+              where key = new.bucket_id
+              ),
+            (
+              select
+                case client
+                  when 'aw-watcher-idea' then 'file'
+                  when 'aw-client-web' then 'url'
+                  when 'aw-watcher-window' then 'title'
+                  end
+              from bucketmodel
+              where key = new.bucket_id
+              )
+           );
+  end;
+        """)
+
+        self.db.execute_sql("""
+        CREATE TRIGGER if not exists update_duration AFTER UPDATE ON eventmodel
+        WHEN OLD.duration != new.duration
+        begin
+            update resource
+            set duration = new.duration
+            where eventmodel_id = new.id;
+        end;
+        """)
+
+
+        # self.db.execute_sql("""
+        # CREATE TABLE IF NOT EXISTS resource (
+        #     id            INTEGER PRIMARY KEY AUTOINCREMENT
+        #                           NOT NULL,
+        #     eventmodel_id INTEGER REFERENCES eventmodel (id)
+        #                           NOT NULL,
+        #     project       VARCHAR,
+        #     app           VARCHAR NOT NULL,
+        #     path          VARCHAR NOT NULL
+        # );
+        # """)
+        #
+        #
+        # self.db.execute_sql("""
+        # CREATE TRIGGER IF NOT EXISTS extract_resource
+        #          AFTER INSERT
+        #             ON eventmodel
+        #       FOR EACH ROW
+        #       WHEN extract_path(NEW.datastr) IS NOT NULL
+        # BEGIN
+        #     INSERT INTO resource (
+        #          eventmodel_id,
+        #          project,
+        #          app,
+        #          path
+        #     )
+        #     VALUES (
+        #         NEW.id,
+        #         (
+        #             SELECT extract_project(datastr)
+        #             FROM eventmodel
+        #             WHERE extract_project(datastr) IS NOT NULL AND
+        #                   timestamp >= datetime(NEW.timestamp, '-10 minutes')
+        #             ORDER BY timestamp DESC
+        #             LIMIT 1
+        #         ),
+        #         extract_app(NEW.datastr),
+        #         extract_path(NEW.datastr)
+        #     );
+        # END;
+        # """)
+
+
+
+        # self.db.execute_sql("""
+        #     CREATE TABLE IF NOT EXISTS activeproject (
+        #         path  VARCHAR (255)           NOT NULL,
+        #         start_timestamp DATETIME      NOT NULL
+        #                                       DEFAULT (strftime('%Y-%m-%d %H:%M:%f000+00:00', 'now')),
+        #         end_timestamp DATETIME        NOT NULL
+        #                                       DEFAULT (strftime('%Y-%m-%d %H:%M:%f000+00:00', 'now', '+10 minutes'))
+        #     );
+        # """)
+        #
+        # self.db.execute_sql("""
+        #     CREATE TRIGGER IF NOT EXISTS active_project
+        #     AFTER INSERT
+        #         ON eventmodel
+        #     FOR EACH ROW
+        #     WHEN extract_intellij_project_path(json_extract(NEW.datastr, '$.title') ) IS NOT NULL
+        #     BEGIN
+        #     INSERT INTO [ActiveProject] (path, start_timestamp, end_timestamp) VALUES (
+        #        extract_intellij_project_path(json_extract(NEW.datastr, '$.title')),
+        #        NEW.timestamp,
+        #        strftime('%Y-%m-%d %H:%M:%f000+00:00', NEW.timestamp, '+10 minutes')
+        #     );
+        #     END;
+        # """)
 
     def update_bucket_keys(self) -> None:
         buckets = BucketModel.select()
