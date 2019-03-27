@@ -156,58 +156,93 @@ class PeeweeStorage(AbstractStorage):
             EventModel.create_table()
         self.update_bucket_keys()
 
-        self.db.execute_sql("""
-        create table if not exists resource (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  eventmodel_id integer REFERENCES eventmodel (id),
-  timestamp datetime,
-  duration decimal(10,5),
-  project varchar(255),
-  identifier varchar(255),
-  type varchar(255)
-);
-        """)
+#         self.db.execute_sql("""
+#         create table if not exists resource (
+#   id integer PRIMARY KEY AUTOINCREMENT,
+#   eventmodel_id integer REFERENCES eventmodel (id),
+#   timestamp datetime,
+#   duration decimal(10,5),
+#   project varchar(255),
+#   identifier varchar(255),
+#   type varchar(255)
+# );
+#         """)
 
         self.db.execute_sql("""
-        create trigger if not exists add_resource
-  after insert on eventmodel
-  for each row
-  begin
-    insert into resource (eventmodel_id, timestamp, duration, project, identifier, type)
-    values (
-            new.id,
-            new.timestamp,
-            new.duration,
-            (
-              select json_extract(datastr, '$.projectPath')
-              from eventmodel
-              where json_extract(datastr, '$.project') is not null
-                and timestamp >= datetime('now', '-10 minutes')
-              order by timestamp desc
-              limit 1
-            ),
-            (
-              select
-                     case client
-                     when 'aw-watcher-idea' then   json_extract(new.datastr, '$.file')
-                when 'aw-client-web' then json_extract(new.datastr, '$.url')
-                       when 'aw-watcher-window' then json_extract(new.datastr, '$.title')
-              end
-              from bucketmodel
-              where key = new.bucket_id
-              ),
-            (
-              select
-                case client
-                  when 'aw-watcher-idea' then 'file'
-                  when 'aw-client-web' then 'url'
-                  when 'aw-watcher-window' then 'title'
-                  end
-              from bucketmodel
-              where key = new.bucket_id
-              )
-           );
-  end;
+        create table if not exists resource (
+          id integer PRIMARY KEY AUTOINCREMENT,
+          eventmodel_id integer REFERENCES eventmodel (id),
+          
+          timestamp datetime,
+          duration decimal(10,5),
+          tracker_name varchar(255),
+          app_name varchar(255),
+          app_title varchar(255),
+          reference varchar(255),
+          project varchar(255)
+        );
+        """)
+
+
+        self.db.execute_sql("""
+            create trigger if not exists add_resource
+                after insert on eventmodel
+                for each row
+                    begin
+                    insert into resource (eventmodel_id, timestamp, duration, tracker_name, app_name, app_title, reference, project)
+                    values (
+                        new.id,
+                        new.timestamp,
+                        new.duration,
+                        (
+                          select client
+                          from bucketmodel
+                          where key = new.bucket_id
+                        ),  --  as tracker_name
+                        (
+                            select
+                                case type
+                                    when 'app.editor.activity' then NULL
+                                    when 'web.tab.current' then NULL
+                                    when 'currentwindow' then json_extract(new.datastr, '$.app')
+                                end
+                            from bucketmodel
+                            where key = new.bucket_id
+                        ),  --  as app_name
+                        (
+                            select
+                                case type
+                                    when 'app.editor.activity' then NULL
+                                    when 'web.tab.current' then
+                                        case bucketmodel.id
+                                            when 'aw-watcher-web-firefox' then json_extract(new.datastr, '$.title') || ' - Mozilla Firefox'
+                                            when 'aw-watcher-web-chrome' then json_extract(new.datastr, '$.title') || ' - Google Chrome'
+                                        end
+                                    when 'currentwindow' then json_extract(new.datastr, '$.title')
+                                end
+                            from bucketmodel
+                            where key = new.bucket_id
+                        ),  --  as app_title
+                        (
+                            select
+                                case type
+                                    when 'app.editor.activity' then json_extract(new.datastr, '$.file')
+                                    when 'web.tab.current' then json_extract(new.datastr, '$.url')
+                                    when 'currentwindow' then json_extract(new.datastr, '$.title')
+                                end
+                            from bucketmodel
+                            where key = new.bucket_id
+                        ),  --  as reference
+                        (
+                          select json_extract(datastr, '$.projectPath')
+                          from eventmodel
+                          where json_extract(datastr, '$.project') is not null
+                            and timestamp >= datetime('now', '-10 minutes')
+                          order by timestamp desc
+                          limit 1
+                        ) -- as project
+                    );
+            end;
         """)
 
         self.db.execute_sql("""
