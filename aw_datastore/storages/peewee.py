@@ -176,6 +176,7 @@ class PeeweeStorage(AbstractStorage):
           timestamp datetime,
           duration decimal(10,5),
           tracker_name varchar(255),
+          tracker_type varchar(255),
           app_name varchar(255),
           app_title varchar(255),
           reference varchar(255),
@@ -189,7 +190,7 @@ class PeeweeStorage(AbstractStorage):
                 after insert on eventmodel
                 for each row
                     begin
-                    insert into resource (eventmodel_id, timestamp, duration, tracker_name, app_name, app_title, reference, project)
+                    insert into resource (eventmodel_id, timestamp, duration, tracker_name, tracker_type, app_name, app_title, reference, project)
                     values (
                         new.id,
                         new.timestamp,
@@ -199,6 +200,11 @@ class PeeweeStorage(AbstractStorage):
                           from bucketmodel
                           where key = new.bucket_id
                         ),  --  as tracker_name
+                        (
+                            select type
+                            from bucketmodel
+                            where key = new.bucket_id
+                        ), --  as tracker_type
                         (
                             select
                                 case type
